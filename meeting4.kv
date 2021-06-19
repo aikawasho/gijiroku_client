@@ -1,0 +1,165 @@
+MyRoot:
+
+
+<MyRoot>:
+
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
+     
+    orientation:'vertical'
+    
+    ScrollView:
+        scroll_y:0
+        do_scroll_x:False
+        Text_Layout:
+            size_hint_y: None
+    
+    Button_Layout:
+
+<Text_Layout>:
+    orientation:'vertical'
+    spacing: 5
+        
+
+<Sentence>:
+
+    size_hint:None,None
+    width:500
+    height : 60
+    y : 30
+    text_validate_unfocus:False
+    
+<Play_Button>:
+    text:'再生'
+    size_hint:None,None
+    x : 500
+    y : 30
+    width:50
+    height:60
+    
+<Button_Layout>:
+
+    size_hint_x:1
+    size_hint_y:None
+    height:50
+    
+    REC_Button:
+        text : '録音開始'
+    Input_Button:
+        text : 'ファイル選択'
+    Summary_Button:
+        text : '議事録作成'
+    Setting_Button:
+        text : '設定'
+
+<REC_Button>:
+    background_color:0, .3, .4, .85
+    background_normal:''
+ 
+<Input_Button>:
+    background_color:0, .2, .2, .85
+    background_normal:''
+
+<Setting_Button>:
+    background_color:.3, .3, .4, .85
+    background_normal:''
+    
+<Summary_Button>:
+    background_color:.3, .5, .4, .85
+    background_normal:''
+    
+    
+<SettingMenu>
+    orientation: 'vertical'
+    FloatLayout:
+        Label:
+            pos_hint: {'center': (.1, .8)}
+            text: 'マイク : '
+            
+        input_spinner:
+            size_hint: None, None
+            size: 500, 44
+            pos_hint: {'center': (.5, .8)}
+
+        Label:
+            pos_hint: {'center': (.1, .5)}
+            text: 'スピーカ : '
+            
+        output_spinner   
+            size_hint: None, None
+            size: 500, 44
+            pos_hint: {'center': (.5, .5)}
+            
+    Button:
+        size_hint: 1,0.1
+        text:'閉じる'
+        on_release: root.popup_close()
+
+<SummaryMenu>
+    orientation: 'vertical'
+    FloatLayout:
+        Label:
+            pos_hint: {'center': (.05, .9)}
+            text: '全文 : '
+            
+        TestInput:
+            id: texts
+            pos_hint: {'center': (.5, .75)}
+            size_hint:0.8,0.4
+            text: root.text_output()
+            
+        Label:
+            pos_hint: {'center': (.05, .45)}
+            text: '重要 : '
+            
+        TextInput:  
+            id: summary
+            size_hint:0.8,0.2
+            pos_hint: {'center': (.5, .4)}
+            text:root.summary_output()
+            
+        Label:
+            pos_hint: {'center': (.05, .20)}
+            text: 'タスク : '
+            
+        TextInput:   
+            id: tasks
+            size_hint:0.8,0.2
+            pos_hint: {'center': (.5, .15)}
+            text:root.task_output()
+    BoxLayout: 
+        size_hint: 1,0.1
+
+        Button:
+            text:'閉じる'
+            on_release: root.popup_close()
+        Button:
+            text:'議事録作成'
+            on_release: root.send_giji()
+        
+<InputMenu>:
+    orientation: 'vertical'
+    FileChooser:
+        path:'../../'
+        filters: ['*.wav']
+        FileChooserListLayout
+        
+    Button:
+        size_hint: 1,0.1
+        text:'開く'
+        on_release: root.popup_close(),root.wav_send()
+        
+<input_spinner>:
+
+<Type_Spinner>:
+    values:'','タスク','重要'
+    size_hint:None,None
+    width:200
+    height : 30
+    
+<TestInput>:
+    text_validate_unfocus:False
