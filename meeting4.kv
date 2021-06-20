@@ -143,6 +143,8 @@ MyRoot:
         
 <InputMenu>:
     orientation: 'vertical'
+    ProgressBar:
+        size_hint: 1,0.05
     FileChooser:
         path:'../../'
         filters: ['*.wav']
@@ -151,7 +153,7 @@ MyRoot:
     Button:
         size_hint: 1,0.1
         text:'開く'
-        on_release: root.popup_close(),root.wav_send()
+        on_release:root.wav_send()
         
 <input_spinner>:
 

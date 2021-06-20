@@ -14,7 +14,6 @@ from kivy.properties import ObjectProperty
 from kivy.uix.popup import Popup
 from kivy.uix.spinner import Spinner
 from kivy.uix.label import Label
-from recording.speech_t import speech_text
 import os
 import pyaudio
 import numpy as np
@@ -45,11 +44,11 @@ INPUT = 4
 CON = 5
 GIJI = 6
 
-port = 9012
-MSGLEN = 4096
+port = 50005
+MSGLEN = 8192
 #add = "18.179.223.246"
-add = "18.179.223.246"
-add = "ec2-18-179-223-246.ap-northeast-1.compute.amazonaws.com"
+add = "127.0.0.1"
+#add = "ec2-18-179-223-246.ap-northeast-1.compute.amazonaws.com"
 
 
 class AudioRecorder_Player:
@@ -135,9 +134,8 @@ class AudioRecorder_Player:
     def playAudio(self,wav_id):
         pa = pyaudio.PyAudio()
 
-        pac = PLAY.to_bytes(2, 'big')
-        pac += wav_id.to_bytes(5,'big')
-        r_packet =send_pac_recieve(pac)
+        pac = wav_id.to_bytes(5,'big')
+        r_packet =send_pac_recieve(PLAY,pac)
         framerate = int.from_bytes(r_packet[0:4], 'big')
         samplewidth = int.from_bytes(r_packet[4:6], 'big')
         nchanneles = int.from_bytes(r_packet[6:8],'big')
@@ -156,12 +154,15 @@ class AudioRecorder_Player:
         pa.terminate()
         self.PlayB.state = 'normal'
         
-    def recieve_text(self,pac):
+    def recieve_text(self,type_ID,pac):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((add, port))
 
             if pac:
-                send_pac(client,pac)
+                if self.ProgressBar:
+                    send_pac(client,type_ID,pac,self.ProgressBar)
+                else:
+                    send_pac(client,type_ID,pac,None)
             r_packet = bytes()
             while True:
                 data = client.recv(4096)
@@ -169,14 +170,13 @@ class AudioRecorder_Player:
                 if not data:
                     break
         len_sum = 0
-        print(len(r_packet))
         while True:
             wav_id =int.from_bytes(r_packet[len_sum:len_sum+5], 'big')
             type_ = int.from_bytes(r_packet[len_sum+5:len_sum+6], 'big')
-            text_len = int.from_bytes(r_packet[len_sum+6:len_sum+8], 'big')
-            
-            text_r = r_packet[len_sum+8:len_sum+8+text_len]
-            len_sum += len_sum+8+text_len
+            text_len = int.from_bytes(r_packet[len_sum+6:len_sum+11], 'big')
+            print('wav_id:',wav_id)
+            text_r = r_packet[len_sum+11:len_sum+11+text_len]
+            len_sum += len_sum+11+text_len
             text_r = text_r.decode('utf-8')
             textinput = Sentence(text=text_r)
             textinput.y += self.id
@@ -220,12 +220,11 @@ class AudioRecorder_Player:
         print("Sampling rate : ", framerate)
         print("Frame num : ", nframes)
         self.pac = bytes()
-        self.pac += INPUT.to_bytes(2, 'big')
         self.pac += framerate.to_bytes(4,'big')
         self.pac += samplewidth.to_bytes(2,'big')
         self.pac += nchanneles.to_bytes(2,'big')
         self.pac += buf
-        self.recieve_text(self.pac)
+        self.recieve_text(INPUT,self.pac)
         
     def send_wav(self):
         # 送信は別のスレッドでする
@@ -245,17 +244,43 @@ def playing(player,wav_id):
     audio_thread.start()
     
     
-def send_pac(client,q):
+def send_pac(client,type_ID,q,ProgressBar):
     print('connect to' , add, 'port:' ,port)
-    packet = int(len(q)+4).to_bytes(4,'big')
-    packet += q
-    client.sendall(packet)
+    print(len(q))
+    if ProgressBar:
+       # ProgressBar.max = len(q)+(int(len(q)/MSGLEN)+1)*2
+        ProgressBar.max = len(q)+2
+        ProgressBar.value = 0
+        
+    offset = 0
+    packet = bytearray(MSGLEN)
+    packet[0:2] = type_ID.to_bytes(2,'big')
+    packet[2:] = len(q).to_bytes(MSGLEN-2,'big')
+    client.send(packet)
+
+    while offset < len(q):
+        #if MSGLEN < len(q)-offset:
+        # packet[0:2] = CON.to_bytes(2, 'big')
+        packet[:] = q[offset:offset+MSGLEN]
+        send_len = client.send(packet)
+        offset += send_len
+        if ProgressBar:
+             ProgressBar.value = offset
+        #else:
+            #packet = bytearray(MSGLEN)
+           # packet[0:2] = type_ID.to_bytes(2, 'big')
+           # packet[2:len(q)-offset+2] = q[offset:]
+            #send_len = client.send(packet)
+            #offset += send_len
+    if ProgressBar:
+        ProgressBar.value = len(q)
+        ProgressBar.parent.popup_close()       
     print('sended')
 
-def send_pac_recieve(pac):
+def send_pac_recieve(type_ID,pac):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
         client.connect((add, port))
-        send_pac(client,pac)
+        send_pac(client,type_ID,pac,None)
         print('sended')
         r_packet = bytes()
       
@@ -407,11 +432,14 @@ class InputMenu(BoxLayout):
         print(self.children[1].selection)
         if self.children[1].selection:
             fname = self.children[1].selection[0]
-            self.player.input_wav(fname)
+            self.player.ProgressBar = self.children[2]
+            #アップロードは別のスレッドでする
+            audio_thread = threading.Thread(target=self.player.input_wav,args=(fname,))
+            audio_thread.start()
+            
             
     def set_player(self,player):
         self.player = player
-        
         
             
 class SummaryMenu(BoxLayout):
@@ -443,7 +471,6 @@ class SummaryMenu(BoxLayout):
         
     def send_giji(self):
 
-        pac = GIJI.to_bytes(2, 'big')
         #本文
         if self.children[1].children[4].text:
             t = self.children[1].children[4].text.encode()
@@ -468,7 +495,7 @@ class SummaryMenu(BoxLayout):
           
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((add, port))
-            send_pac(client,pac)
+            send_pac(client,GIJI,pac,None)
         
         return
         
@@ -680,12 +707,11 @@ if __name__ == '__main__':
 
     with open('Config.json', 'w') as f:
         json.dump(df, f, ensure_ascii=False)  
-        
+    pac = bytes(1)      
     #スタートの処理
-    pac = SET.to_bytes(2, 'big')
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
         client.connect((add, port))
-        send_pac(client,pac)
+        send_pac(client,SET,pac,None)
     app = Meeting4App()
     #app.dirnum = len([f.name for f in os.scandir('../Server/wav_file') if not f.name.startswith('.')])
     app.run()
