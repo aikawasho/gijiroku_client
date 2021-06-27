@@ -30,6 +30,7 @@ import tkinter
 from tkinter import ttk
 from multiprocessing import Process
 from kivy.properties import StringProperty
+import math
 
 LabelBase.register(DEFAULT_FONT,'myfont.ttc')
 
@@ -43,7 +44,7 @@ PLAY = 3
 INPUT = 4
 CON = 5
 GIJI = 6
-
+CHUNK = 176400
 port = 50005
 MSGLEN = 8192
 #add = "18.179.223.246"
@@ -59,7 +60,7 @@ class AudioRecorder_Player:
 
         # 止める用のフラグ
         self.paused = threading.Event()
-        self.CHUNK = 4094
+        self.CHUNK = 4410
         self.FORMAT = pyaudio.paInt16 # 16bit
         self.CHANNELS = 1             # monaural
         self.fs = 48000
@@ -134,21 +135,37 @@ class AudioRecorder_Player:
     def playAudio(self,wav_id):
         pa = pyaudio.PyAudio()
 
-        pac = wav_id.to_bytes(5,'big')
-        r_packet =send_pac_recieve(PLAY,pac)
-        framerate = int.from_bytes(r_packet[0:4], 'big')
-        samplewidth = int.from_bytes(r_packet[4:6], 'big')
-        nchanneles = int.from_bytes(r_packet[6:8],'big')
-        
-        stream = pa.open(rate=framerate,
-                channels=nchanneles,
-                format=p.get_format_from_width(samplewidth),
-                output=True,
-                frames_per_buffer=self.CHUNK)
-        data_list = [r_packet[8+idx:idx + self.CHUNK] for idx in range(0,len(r_packet[8:]), self.CHUNK)]
-        for d in data_list:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            client.connect((add, port))
+            pac = wav_id.to_bytes(5,'big')
+            send_pac(client,PLAY,pac,None)
+            r_cmd,MSG = recieve_pac(client)
 
-            stream.write(d)
+            framerate = int.from_bytes(MSG[0:4], 'big')
+            samplewidth = int.from_bytes(MSG[4:6], 'big')
+            nchanneles = int.from_bytes(MSG[6:8],'big')
+            sig_len = int.from_bytes(MSG[8:],'big')
+
+            print("Channel num : ", nchanneles)
+            print("Sample width : ", samplewidth)
+            print("Sampling rate : ", framerate)
+            self.data_array = bytearray(sig_len)
+            stream = pa.open(rate=framerate,
+                    channels=nchanneles,
+                    format=p.get_format_from_width(samplewidth),
+                    output=True,
+                    frames_per_buffer=self.CHUNK)
+            self.r_cmd,MSG = recieve_pac(client)
+            self.data_array[:len(MSG)] = MSG        
+            off_set = 0
+            while off_set < sig_len:
+               idx = int(min(sig_len,off_set+CHUNK/2))
+               print(idx)
+               stream.write(bytes(self.data_array[off_set:idx]))
+               off_set = idx
+
+               if off_set + CHUNK/2 < sig_len:
+                  streaming_thread(self,client,off_set)
 
         stream.close()
         pa.terminate()
@@ -225,13 +242,27 @@ class AudioRecorder_Player:
         self.pac += nchanneles.to_bytes(2,'big')
         self.pac += buf
         self.recieve_text(INPUT,self.pac)
+
+    def streaming(self,client,off_set):
+        q = off_set.to_bytes(5,'big')
+        send_pac(client,0,q,None)
+        r_cmd,MSG = recieve_pac(client)
+        self.r_cmd = r_cmd
+        idx = int(off_set+CHUNK/2)
+        self.data_array[idx:idx+len(MSG)] = MSG
+			
         
     def send_wav(self):
         # 送信は別のスレッドでする
         send_thread = threading.Thread(target = self.recieve_text,args=(self.pac,))
         send_thread.start()
 
-                    
+def streaming_thread(player,client,off_set):
+
+    audio_thread = threading.Thread(target=player.streaming,args=(client,off_set))
+    audio_thread.setDaemon(True)
+    audio_thread.start()
+          
 def recording(recorder,box):
     # 録音は別のスレッドでする
     audio_thread = threading.Thread(target=recorder.recordAudio,args=(box,))
@@ -259,19 +290,11 @@ def send_pac(client,type_ID,q,ProgressBar):
     client.send(packet)
 
     while offset < len(q):
-        #if MSGLEN < len(q)-offset:
-        # packet[0:2] = CON.to_bytes(2, 'big')
         packet[:] = q[offset:offset+MSGLEN]
         send_len = client.send(packet)
         offset += send_len
         if ProgressBar:
              ProgressBar.value = offset
-        #else:
-            #packet = bytearray(MSGLEN)
-           # packet[0:2] = type_ID.to_bytes(2, 'big')
-           # packet[2:len(q)-offset+2] = q[offset:]
-            #send_len = client.send(packet)
-            #offset += send_len
     if ProgressBar:
         ProgressBar.value = len(q)
         ProgressBar.parent.popup_close()       
@@ -297,6 +320,32 @@ def send_pac_recieve(type_ID,pac):
     
     return r_packet
 
+def recieve_pac(client):
+
+	MSGLEN = 8192
+	cicle_t = 0
+	data_len = 0
+	offset = 0
+	data_info = bytes()
+	while data_len < MSGLEN:
+		tmp = client.recv(MSGLEN)
+		data_info += tmp
+		data_len = len(data_info)
+	r_cmd = int.from_bytes(data_info[0:2], 'big')
+	data_len = int.from_bytes(data_info[2:MSGLEN],'big')
+	print(r_cmd)
+	print(data_len)
+	MSG = bytearray(data_len)
+	offset += len(data_info)-MSGLEN
+	MSG[:offset]=data_info[MSGLEN:]
+	while offset < data_len:
+		start_t = time.time()
+		tmp = client.recv(MSGLEN)
+		recv_t = time.time()
+		MSG[offset:offset+len(tmp)] = tmp
+		offset += len(tmp)
+
+	return r_cmd, MSG
 def clean_text(text):
     ngw= ['',' ','　']
     text = text.split('\n')
@@ -338,64 +387,9 @@ class REC_Button(ToggleButton):
         else:
             self.recorder.paused.set()
             self.text = '録音開始'
-            
-        #path = '/Users/shota/Documents/ginza/wikihow_japanese/data/output/test.jsonl'
-        #test_data = pd.read_json(path, orient='records', lines=True)
-        #a = test_data['src'][0].split('。')
-        #a = [a2+'。' for a2 in a] 
-        #a[random.randint(0,len(a)-1)]
-        #box = self.parent.parent.children[1].children[0]
-        #textinput = Sentence(text=a[random.randint(0,len(a)-1)])
-        #textinput.y = self.id
-        #text_play = FloatLayout()
-        #text_play.add_widget(textinput)
-        #pb = Play_Button()
-        #pb.file_name = ''
-        #pb.y = self.id
-        #text_play.add_widget(pb)
-        #box.add_widget(text_play)
-        #self.id += 60
-        #if self.id > self.parent.parent.children[1].children[0].height:
-        #    self.parent.parent.children[1].children[0].height = self.id
-            
+
 class Sentence(TextInput):
     
-   # def __init__(self,**kwargs):
-    #    super().__init__(**kwargs)
-     #   self.composition_string = ''
-      #  self.tmp_text = ''
-       # self.flag = False
-        #self.ty = 0
-        #self.tx = 0
-        
-    #def on_text_validate(instance):
-     #   print('User pressed enter in', instance)
-        
-    #def on_text(self, value,a):
-   #     if self.tmp_text:
-     #       if len(self._text) > len(self.text):
-      #          self._text = self.text
-       #     else:
-        #        self.text = self._text
-    
-   # def my_callback(self,_):
-    #    self.text = self._text
-     #   self.cursor = (self.tx,self.y)
-      #  self.delete_selection(from_undo=False)
-       # self.on_text_validate()
-        #return False
-
-    #def insert_text(self,substring, from_undo=False):
-     #   s = substring.replace('\n','')
-      #  if s:
-       #     self._text += s
-        #    self.tx = len(self._text)
-        #else:
-         #   self._text += '\n'
-          #  self.ty += 1
-           # self.tx = 0
-        #Clock.schedule_interval(self.my_callback, 0.1)
-        #return super(Sentence, self).insert_text(s, from_undo=from_undo)
         pass
 class Type_Spinner(Spinner):
     
@@ -405,10 +399,6 @@ class Play_Button(ToggleButton):
     
     def __init__(self,**kwargs):
         super().__init__(**kwargs)
-        self.CHUNK = 4096
-        self.FORMAT = pyaudio.paInt16 # 16bit
-        self.CHANNELS = 1             # monaural
-        self.fs = 16000
         self.player = AudioRecorder_Player()
 
     def on_press(self):
@@ -589,10 +579,9 @@ class Summary_Button(Button):
             result = "\n".join(tmp)    
             if len(tmp) > 1:
                 pac = bytes()
-                pac += SUM.to_bytes(2, 'big')
                 tmp ="\n".join(tmp)
                 pac += tmp.encode()
-                r_packet = send_pac_recieve(pac)
+                r_packet = send_pac_recieve(SUM,pac)
                 suma = r_packet.decode()
                 suma = suma.split('。') 
                 suma = [a+ '。' for a in suma]
