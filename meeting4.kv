@@ -26,20 +26,31 @@ MyRoot:
         
 
 <Sentence>:
-
-    size_hint:None,None
-    width:500
-    height : 60
-    y : 30
+    id : sentence
     text_validate_unfocus:False
-    
+
 <Play_Button>:
+    id : play_button
     text:'再生'
-    size_hint:None,None
-    x : 500
+
+<Seek_Bar>:
+    id : play_slider
+
+<Sentence_Layout>:
+    size_hint_x : 1
+    size_hint_y : None
     y : 30
-    width:50
     height:60
+    
+    Sentence:
+        size_hint_x : 0.6
+        size_hint_y : 1
+    Play_Button:
+        size_hint_x : 0.08
+        size_hint_y : 1
+    Seek_Bar:
+        size_hint_x : 0.32
+        size_hint_y : 1
     
 <Button_Layout>:
 
