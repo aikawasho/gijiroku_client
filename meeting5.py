@@ -45,7 +45,7 @@ PLAY = 3
 INPUT = 4
 CON = 5
 GIJI = 6
-BAFFA = 176400
+BAFFA = 19200
 port = 50005
 MSGLEN = 8192
 #add = "18.179.223.246"
@@ -74,6 +74,7 @@ class AudioRecorder_Player:
         self.off_set = 0
         self.MSGlen = 0
         self.loading = 0
+        self.seek = 0
 
     def recordAudio(self,box):
         stop_counter = 0
@@ -147,12 +148,14 @@ class AudioRecorder_Player:
             framerate = int.from_bytes(MSG[0:4], 'big')
             samplewidth = int.from_bytes(MSG[4:6], 'big')
             nchanneles = int.from_bytes(MSG[6:8],'big')
-            sig_len = int.from_bytes(MSG[8:],'big')
+            nframes = int.from_bytes(MSG[8:],'big')
             #シークバー
-            seek_bar = self.PlayB.parent.children[0]
-            seek_bar.max = sig_len
-            seek_bar.min = 0
-            seek_bar.value = 0
+            self.seek_bar = self.PlayB.parent.children[0]
+            self.seek_bar.max = nframes
+            self.seek_bar.min = 0
+            self.seek_bar.value = 0
+            self.off_set = 0
+            self.loading = 0
             print("STREAMING")
             print("Channel num : ", nchanneles)
             print("Sample width : ", samplewidth)
@@ -160,7 +163,7 @@ class AudioRecorder_Player:
             self.data_array = bytearray(BAFFA)
             stream = pa.open(rate=framerate,
                     channels=nchanneles,
-                    format=p.get_format_from_width(samplewidth),
+                    format=pa.get_format_from_width(samplewidth),
                     output=True,
                     frames_per_buffer=self.CHUNK)
             print('first CHUNK recieve')
@@ -171,32 +174,44 @@ class AudioRecorder_Player:
                stream.write(bytes(self.data_array[:len(MSG)]))
             else:
 	
-               while self.r_cmd != 1:
+               while self.off_set+BAFFA/2/samplewidth < nframes:
                   print('PLAY!')
                   DA = self.data_array[baffa_pos:baffa_pos+int(BAFFA/2)]
                   for i in range(0,int(BAFFA/2/self.CHUNK/2)):
                      stream.write(bytes(DA[i*self.CHUNK*2:(i+1)*self.CHUNK*2]))
-                     seek_bar.value += self.CHUNK*2
-
+                     self.off_set += self.CHUNK*2/samplewidth
+                     self.seek_bar.value += self.CHUNK*2/samplewidth
+                     if self.seek_bar.value != self.off_set:
+                       self.off_set = self.seek_bar.value
+                       self.seek = 1
+                       print('break')
+                       break
                   print('NEXT CHUNK recieve')
-                  if self.r_cmd == 0:
-                     if self.loading == 0:
-                        streaming_thread(self,client,baffa_pos)
+                  if self.loading == 0:
+                     if self.seek == 1:
+                        print('SEEK')
+                        baffa_pos = 0
+                        self.data_array = bytearray(BAFFA)
+                        self.streaming(client,baffa_pos)
+
                      else:
-                        while self.loading == 1:
-                           print('loading')
-                           time.sleep(1)
-                  if baffa_pos == 0:
-                     baffa_pos = int(BAFFA/2)
+                        streaming_thread(self,client,baffa_pos)
+
+                        if baffa_pos == 0:
+                           baffa_pos = int(BAFFA/2)
+                        else:
+                           baffa_pos = 0
                   else:
-                     baffa_pos = 0
+                     while self.loading == 1:
+                        print('loading')
+                        time.sleep(1)
 
-
-               print('LAST CHUNK PLAY')
-               stream.write(bytes(self.data_array[baffa_pos:baffa_pos+self.MSGlen]))
-               seek_bar.value = sig_len
+        print('LAST CHUNK PLAY!!')
+        stream.write(bytes(self.data_array[baffa_pos:baffa_pos+self.MSGlen]))
+        self.seek_bar.value = nframes
         stream.close()
         pa.terminate()
+        client.close()
         self.PlayB.state = 'normal'
         
     def recieve_text(self,type_ID,pac):
@@ -222,7 +237,9 @@ class AudioRecorder_Player:
             text_r = r_packet[len_sum+11:len_sum+11+text_len]
             len_sum += len_sum+11+text_len
             text_r = text_r.decode('utf-8')
+            text_r = clean_text(text_r)
             S_Layout = Sentence_Layout()
+            print('text_r',text_r)
             S_Layout.children[2].text = text_r
             S_Layout.y += self.id
             S_Layout.children[1].wav_id = wav_id
@@ -264,25 +281,30 @@ class AudioRecorder_Player:
 
     def streaming(self,client,baffa_pos):
         self.loading = 1
-        q = self.off_set.to_bytes(5,'big')
-        send_pac(client,0,q,None)
+        if self.seek == 1:
+           header = 1
+           print('SEEK OFF SET:',int(self.off_set))
+           self.seek = 0
+        else:
+           header = 0
+        q = int(self.seek_bar.value).to_bytes(MSGLEN-2,'big')
+        send_pac(client,header,q,None)
         r_cmd,MSG = recieve_pac(client)
-        if r_cmd == 1:
-           client.close()
         self.r_cmd = r_cmd
         self.MSGlen = len(MSG)
+        print('BAFFALEN',len(MSG))
         print('DOWNLOAD')
         self.data_array[baffa_pos:baffa_pos+len(MSG)] = MSG
         self.loading = 0
         
     def send_wav(self):
-        # 送信は別のスレッドでする
+        # wavfile送信は別のスレッドでする
         send_thread = threading.Thread(target = self.recieve_text,args=(self.pac,))
         send_thread.start()
 
 def streaming_thread(player,client,baffa_pos):
 
-    audio_thread = threading.Thread(target=player.streaming,args=(client,baffa_pos,))
+    audio_thread = threading.Thread(target=player.streaming,args=(client,baffa_pos))
     audio_thread.setDaemon(True)
     audio_thread.start()
           
@@ -647,7 +669,12 @@ class Text_Layout(FloatLayout):
 class Sentence_Layout(BoxLayout):
     pass
 class Seek_Bar(Slider):
-    pass           
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs)
+        self.touch_sl = False
+    def on_touch_up(self, touch):
+        if self.collide_point(*touch.pos) and self.touch_sl == False:
+          self.touch_sl = True 
 class Button_Layout(BoxLayout):
     pass
 
@@ -727,3 +754,4 @@ if __name__ == '__main__':
     app = Meeting4App()
     #app.dirnum = len([f.name for f in os.scandir('../Server/wav_file') if not f.name.startswith('.')])
     app.run()
+
