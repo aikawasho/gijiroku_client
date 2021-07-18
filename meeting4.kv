@@ -11,7 +11,7 @@ MyRoot:
             size: self.size
      
     orientation:'vertical'
-    
+
     ScrollView:
         scroll_y:0
         do_scroll_x:False
@@ -46,10 +46,10 @@ MyRoot:
         size_hint_x : 0.6
         size_hint_y : 1
     Play_Button:
-        size_hint_x : 0.08
+        size_hint_x : 0.05
         size_hint_y : 1
     Seek_Bar:
-        size_hint_x : 0.32
+        size_hint_x : 0.35
         size_hint_y : 1
     
 <Button_Layout>:
@@ -160,13 +160,23 @@ MyRoot:
         path:'../../'
         filters: ['*.wav']
         FileChooserListLayout
+    BoxLayout:
+        size_hint:1,0.1    
         
-    Button:
-        size_hint: 1,0.1
-        text:'開く'
-        on_release:root.wav_send()
+        Button:
+            size_hint: 0.5,1
+            text:'開く'
+            on_release:root.wav_send()
+        Button:
+            size_hint: 0.5,1
+            text:'閉じる'
+            on_release: root.popup_close()
         
 <input_spinner>:
+
+<LoadingMenu>:
+    Label:
+        text:'文字起こし中'
 
 <Type_Spinner>:
     values:'','タスク','重要'

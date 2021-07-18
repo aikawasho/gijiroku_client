@@ -45,7 +45,7 @@ PLAY = 3
 INPUT = 4
 CON = 5
 GIJI = 6
-BAFFA = 19200
+BAFFER = 40960*2
 port = 50005
 MSGLEN = 8192
 #add = "18.179.223.246"
@@ -61,20 +61,22 @@ class AudioRecorder_Player:
 
         # 止める用のフラグ
         self.paused = threading.Event()
-        self.CHUNK = 4410
+        self.CHUNK = 4096
         self.FORMAT = pyaudio.paInt16 # 16bit
         self.CHANNELS = 1             # monaural
         self.fs = 48000
         self.silent_th = 2
         self.threshold = 0.1
         self.rec_on = 0
-        self.id = 0
         self.pac = bytes()
         self.sig_len = 2
         self.off_set = 0
         self.MSGlen = 0
         self.loading = 0
         self.seek = 0
+        self.play_stop = 0
+        self.ProgressBar = None
+        self.popup = None
 
     def recordAudio(self,box):
         stop_counter = 0
@@ -99,7 +101,6 @@ class AudioRecorder_Player:
             # ndarrayに変換
             x = np.frombuffer(data, dtype="int16")
             x = x / 32768.0
-            self.pac += WAV.to_bytes(2, 'big')
             self.pac += self.fs.to_bytes(4,'big')
             self.pac += int(2).to_bytes(2,'big')
             self.pac += self.CHANNELS.to_bytes(2,'big')
@@ -146,7 +147,7 @@ class AudioRecorder_Player:
             r_cmd,MSG = recieve_pac(client)
 
             framerate = int.from_bytes(MSG[0:4], 'big')
-            samplewidth = int.from_bytes(MSG[4:6], 'big')
+            self.samplewidth = int.from_bytes(MSG[4:6], 'big')
             nchanneles = int.from_bytes(MSG[6:8],'big')
             nframes = int.from_bytes(MSG[8:],'big')
             #シークバー
@@ -158,62 +159,87 @@ class AudioRecorder_Player:
             self.loading = 0
             print("STREAMING")
             print("Channel num : ", nchanneles)
-            print("Sample width : ", samplewidth)
+            print("Sample width : ", self.samplewidth)
             print("Sampling rate : ", framerate)
-            self.data_array = bytearray(BAFFA)
             stream = pa.open(rate=framerate,
                     channels=nchanneles,
-                    format=pa.get_format_from_width(samplewidth),
+                    format=pa.get_format_from_width(self.samplewidth),
                     output=True,
                     frames_per_buffer=self.CHUNK)
             print('first CHUNK recieve')
             self.r_cmd,MSG = recieve_pac(client)
-            self.data_array[:len(MSG)] = MSG 
-            baffa_pos = 0       
+
             if self.r_cmd == 1:
-               stream.write(bytes(self.data_array[:len(MSG)]))
+               stream.write(MSG)
             else:
-	
-               while self.off_set+BAFFA/2/samplewidth < nframes:
+
+               if self.samplewidth == 2:
+                  self.data_array = np.frombuffer(MSG,dtype = 'int16')
+               else:
+                  self.data_array = np.frombuffer(MSG,dtype = 'int24')
+               baffer_pos = 0
+               while self.r_cmd == 0:  # self.off_set+BAFFER/2/self.samplewidth < nframes:
                   print('PLAY!')
-                  DA = self.data_array[baffa_pos:baffa_pos+int(BAFFA/2)]
-                  for i in range(0,int(BAFFA/2/self.CHUNK/2)):
-                     stream.write(bytes(DA[i*self.CHUNK*2:(i+1)*self.CHUNK*2]))
-                     self.off_set += self.CHUNK*2/samplewidth
-                     self.seek_bar.value += self.CHUNK*2/samplewidth
+                  print('start offset:', self.off_set)
+                  DA = self.data_array[baffer_pos:baffer_pos+int(BAFFER/2/self.samplewidth)]
+                  for i in range(0,int(BAFFER/2/self.CHUNK/2)):
+                     stream.write(DA[int(i*self.CHUNK*2/self.samplewidth):int((i+1)*self.CHUNK*2/self.samplewidth)].tobytes())
+                     self.off_set += self.CHUNK*2/self.samplewidth
+                     self.seek_bar.value += self.CHUNK*2/self.samplewidth
                      if self.seek_bar.value != self.off_set:
                        self.off_set = self.seek_bar.value
                        self.seek = 1
                        print('break')
                        break
-                  print('NEXT CHUNK recieve')
-                  if self.loading == 0:
-                     if self.seek == 1:
-                        print('SEEK')
-                        baffa_pos = 0
-                        self.data_array = bytearray(BAFFA)
-                        self.streaming(client,baffa_pos)
+                     if self.paused.is_set():
+                       while self.paused.is_set():
+                          print('pausing')
+                          time.sleep(1) 
+                    
+                  print('end offset:',self.off_set)
+                  if self.r_cmd ==0:
+                     print('NEXT CHUNK recieve')
+                     if self.loading == 0:
+                        if self.seek == 1:
+                           print('SEEK')
+                           baffer_pos = 0
+                           self.streaming(client,baffer_pos)
 
-                     else:
-                        streaming_thread(self,client,baffa_pos)
-
-                        if baffa_pos == 0:
-                           baffa_pos = int(BAFFA/2)
                         else:
-                           baffa_pos = 0
-                  else:
-                     while self.loading == 1:
-                        print('loading')
-                        time.sleep(1)
+                           streaming_thread(self,client,baffer_pos)
 
+                           if baffer_pos == 0:
+                              baffer_pos = int(BAFFER/2/self.samplewidth)
+                           else:
+                              baffer_pos = 0
+                     else:
+                        while self.loading == 1:
+                           print('loading')
+                           time.sleep(1)
+
+
+        if baffer_pos == 0:
+           baffer_pos = int(BAFFER/2/self.samplewidth)
+        else:
+           baffer_pos = 0
         print('LAST CHUNK PLAY!!')
-        stream.write(bytes(self.data_array[baffa_pos:baffa_pos+self.MSGlen]))
+        DA = self.data_array[baffer_pos:baffer_pos+self.MSGlen]
+        #チャンクごとに再生
+        #最後のあまり再生
+        for i in range(0,int(BAFFER/2/self.CHUNK/2)):
+           stream.write(DA[int(i*self.CHUNK*2/self.samplewidth):int((i+1)*self.CHUNK*2/self.samplewidth)].tobytes())
+           self.off_set += self.CHUNK*2/self.samplewidth
+           self.seek_bar.value += self.CHUNK*2/self.samplewidth
+
+        stream.write(DA[int((i+1)*self.CHUNK*2/self.samplewidth):self.MSGlen].tobytes())
         self.seek_bar.value = nframes
         stream.close()
         pa.terminate()
         client.close()
         self.PlayB.state = 'normal'
-        
+        self.PlayB.text = '再生'
+        self.play_stop = 0
+
     def recieve_text(self,type_ID,pac):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((add, port))
@@ -223,6 +249,9 @@ class AudioRecorder_Player:
                     send_pac(client,type_ID,pac,self.ProgressBar)
                 else:
                     send_pac(client,type_ID,pac,None)
+
+            if self.popup:
+               self.popup.open()
             r_packet = bytes()
             while True:
                 data = client.recv(4096)
@@ -238,18 +267,29 @@ class AudioRecorder_Player:
             len_sum += len_sum+11+text_len
             text_r = text_r.decode('utf-8')
             text_r = clean_text(text_r)
+            S_height = 30*len(text_r)
+            for t in text_r:
+               if len(t) > 30:
+                  S_height += math.ceil(len(t)/30)*10
             S_Layout = Sentence_Layout()
-            print('text_r',text_r)
-            S_Layout.children[2].text = text_r
-            S_Layout.y += self.id
+            S_Layout.height = S_height
+            try:
+               S_Layout.children[2].text ='\n'.join(text_r)
+            except IndexError:
+               print('Error')
+               self.popup.content.children[0].text = 'エラーが発生しました. もう一度やり直してください' 
+            S_Layout.y += self.box.ypos
             S_Layout.children[1].wav_id = wav_id
             self.box.add_widget(S_Layout)
-            self.id += 100
-            if self.id > self.box.height:
-                self.box.height = self.id+30
+            self.box.ypos += 20+S_height
+
+            if self.box.ypos > self.box.height:
+                self.box.height = self.box.ypos+S_height
                 
             if len_sum >= len(r_packet):
                 break
+        if self.popup:
+           self.popup.dismiss()
     def input_wav(self,fname):
         
         waveFile = wave.open(fname, 'r')
@@ -260,7 +300,7 @@ class AudioRecorder_Player:
         nchanneles = waveFile.getnchannels()
 
         # 音声データ1サンプルあたりのバイト数。2なら2bytes(16bit), 3なら24bitなど
-        samplewidth = waveFile.getsampwidth()
+        self.samplewidth = waveFile.getsampwidth()
 
         # サンプリング周波数。普通のCDなら44.1k
         framerate = waveFile.getframerate()
@@ -269,17 +309,17 @@ class AudioRecorder_Player:
         nframes = waveFile.getnframes()
 
         print("Channel num : ", nchanneles)
-        print("Sample width : ", samplewidth)
+        print("Sample width : ", self.samplewidth)
         print("Sampling rate : ", framerate)
         print("Frame num : ", nframes)
         self.pac = bytes()
         self.pac += framerate.to_bytes(4,'big')
-        self.pac += samplewidth.to_bytes(2,'big')
+        self.pac += self.samplewidth.to_bytes(2,'big')
         self.pac += nchanneles.to_bytes(2,'big')
         self.pac += buf
         self.recieve_text(INPUT,self.pac)
 
-    def streaming(self,client,baffa_pos):
+    def streaming(self,client,baffer_pos):
         self.loading = 1
         if self.seek == 1:
            header = 1
@@ -290,21 +330,28 @@ class AudioRecorder_Player:
         q = int(self.seek_bar.value).to_bytes(MSGLEN-2,'big')
         send_pac(client,header,q,None)
         r_cmd,MSG = recieve_pac(client)
+        if self.samplewidth == 2:
+           MSG = np.frombuffer(MSG,dtype = 'int16')
+        else:
+           MSG = np.frombuffer(MSG,dtype = 'int24')
         self.r_cmd = r_cmd
         self.MSGlen = len(MSG)
-        print('BAFFALEN',len(MSG))
+        print('BAFFERLEN',len(MSG))
         print('DOWNLOAD')
-        self.data_array[baffa_pos:baffa_pos+len(MSG)] = MSG
+        self.data_array[baffer_pos:baffer_pos+len(MSG)] = MSG
         self.loading = 0
+        if r_cmd == 1:
+           print('LAST CHUNK RECIEVE')
+           client.close()
         
     def send_wav(self):
         # wavfile送信は別のスレッドでする
-        send_thread = threading.Thread(target = self.recieve_text,args=(self.pac,))
+        send_thread = threading.Thread(target = self.recieve_text,args=(WAV,self.pac,))
         send_thread.start()
 
-def streaming_thread(player,client,baffa_pos):
+def streaming_thread(player,client,baffer_pos):
 
-    audio_thread = threading.Thread(target=player.streaming,args=(client,baffa_pos))
+    audio_thread = threading.Thread(target=player.streaming,args=(client,baffer_pos))
     audio_thread.setDaemon(True)
     audio_thread.start()
           
@@ -389,19 +436,16 @@ def recieve_pac(client):
 
 	return r_cmd, MSG
 def clean_text(text):
-    ngw= ['',' ','　']
+    ngw= [' ','　']
+    text = text.replace(' ','')
+    text = text.replace('　','')
     text = text.split('\n')
-    text = [t for t in text if t not in ngw ]
     tc = []
     for t in text:
-        tmp = t.split('。')
+        tmp = t.split('。')[:-1]
         
         for t in tmp:
-            if t not in ngw:
-                tc.append(t)
-                
-    tc = '\n'.join(tc)            
-    
+           tc.append(t)
     return tc
 
 class REC_Button(ToggleButton):
@@ -444,16 +488,30 @@ class Play_Button(ToggleButton):
         self.player = AudioRecorder_Player()
 
     def on_press(self):
-        pass
-        
+       pass 
     def on_release(self):
-        if self.state == 'normal':
-            self.state = 'down'
-        else:
+
+        if self.player.play_stop == 0:
             self.player.PlayB = self
+            self.state = 'down'
+            #0 : 再生
             playing(self.player,self.wav_id)
-        
+            self.player.play_stop = 1
+            self.text = '停止'
+        else:
+           if self.player.paused.is_set():
+              self.player.paused.clear()
+              self.state == 'down'
+              self.text = '停止'
+           else:
+              self.player.paused.set()
+              self.state = 'normal'
+              self.text = '再生'
+           
 class SettingMenu(BoxLayout):
+    popup_close = ObjectProperty(None)
+
+class LoadingMenu(BoxLayout):
     popup_close = ObjectProperty(None)
     
 class InputMenu(BoxLayout):
@@ -464,6 +522,8 @@ class InputMenu(BoxLayout):
         print(self.children[1].selection)
         if self.children[1].selection:
             fname = self.children[1].selection[0]
+            content = LoadingMenu(popup_close=self.popup_close)
+            self.player.popup = Popup(title='', content=content, size_hint=(0.3, 0.3), auto_dismiss=False)
             self.player.ProgressBar = self.children[2]
             #アップロードは別のスレッドでする
             audio_thread = threading.Thread(target=self.player.input_wav,args=(fname,))
@@ -615,20 +675,27 @@ class Summary_Button(Button):
         task = ''
         imp = ''
         if self.parent.parent.children[1].children[0].children:
-            tmp = [clean_text(a.children[2].text) for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[2].text != '']
-            task = "\n".join([a.children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[0].text == 'タスク'])
-            
+            tmp = [a.children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[2].text != '']
+           # task = "\n".join([a.children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[1].text == 'タスク'])
+            print('Giji list:', tmp) 
             result = "\n".join(tmp)    
             if len(tmp) > 1:
                 pac = bytes()
                 tmp ="\n".join(tmp)
                 pac += tmp.encode()
-                r_packet = send_pac_recieve(SUM,pac)
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                   client.connect((add, port))
+
+                   send_pac(client,SUM,pac,None)
+                
+                   rcmd, r_packet = recieve_pac(client)
+                   print('reieved')
                 suma = r_packet.decode()
                 suma = suma.split('。') 
                 suma = [a+ '。' for a in suma]
                 suma = suma[:-1]
-            imp = [a.children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[0].text == '重要' and a.children[2].text not in suma]
+            print('CHILD:', self.parent.parent.children[1].children)
+            imp = [a.children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[1].text == '重要' and a.children[2].text not in suma]
             
             imp = "\n".join(imp)+ "\n".join(suma)
 
@@ -665,7 +732,7 @@ class Input_Button(Button):
 class Text_Layout(FloatLayout):
     def __init__(self,**kwargs):
         super().__init__(**kwargs)
-            
+        self.ypos = 0    
 class Sentence_Layout(BoxLayout):
     pass
 class Seek_Bar(Slider):
