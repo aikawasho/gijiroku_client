@@ -46,11 +46,12 @@ INPUT = 4
 CON = 5
 GIJI = 6
 BAFFER = 40960*2
-port = 50005
+#port = 50005
+port = 9012
 MSGLEN = 8192
 #add = "18.179.223.246"
-add = "127.0.0.1"
-#add = "ec2-18-179-223-246.ap-northeast-1.compute.amazonaws.com"
+#add = "127.0.0.1"
+add = "ec2-18-179-223-246.ap-northeast-1.compute.amazonaws.com"
 
 
 class AudioRecorder_Player:
@@ -123,7 +124,7 @@ class AudioRecorder_Player:
                         #設定秒間以上だったら送信
                             if length * self.CHUNK > self.fs * self.sig_len:   
 
-                                self.send_wav()
+                                run_thread(self.recieve_text,[WAV,self.pac])
                                 
                             self.pac = bytes()
                             break
@@ -144,13 +145,15 @@ class AudioRecorder_Player:
             client.connect((add, port))
             pac = wav_id.to_bytes(5,'big')
             send_pac(client,PLAY,pac,None)
+            print('ファイル名送信完了')
             r_cmd,MSG = recieve_pac(client)
-
+            print('ファイル情報受け取り完了')
             framerate = int.from_bytes(MSG[0:4], 'big')
             self.samplewidth = int.from_bytes(MSG[4:6], 'big')
             nchanneles = int.from_bytes(MSG[6:8],'big')
             nframes = int.from_bytes(MSG[8:],'big')
             #シークバー
+            print('NFRAMES:',nframes)
             self.seek_bar = self.PlayB.parent.children[0]
             self.seek_bar.max = nframes
             self.seek_bar.min = 0
@@ -166,9 +169,11 @@ class AudioRecorder_Player:
                     format=pa.get_format_from_width(self.samplewidth),
                     output=True,
                     frames_per_buffer=self.CHUNK)
+            #受け取り確認送信
+            send_pac(client,PLAY,'ok'.encode(),None)
             print('first CHUNK recieve')
             self.r_cmd,MSG = recieve_pac(client)
-
+            print('最初のチャンク受け取り完了')
             if self.r_cmd == 1:
                stream.write(MSG)
             else:
@@ -206,7 +211,7 @@ class AudioRecorder_Player:
                            self.streaming(client,baffer_pos)
 
                         else:
-                           streaming_thread(self,client,baffer_pos)
+                           run_thread(self.streaming,[client,baffer_pos])
 
                            if baffer_pos == 0:
                               baffer_pos = int(BAFFER/2/self.samplewidth)
@@ -267,21 +272,25 @@ class AudioRecorder_Player:
             len_sum += len_sum+11+text_len
             text_r = text_r.decode('utf-8')
             text_r = clean_text(text_r)
-            S_height = 30*len(text_r)
+            S_height = 30
             for t in text_r:
                if len(t) > 30:
                   S_height += math.ceil(len(t)/30)*10
             S_Layout = Sentence_Layout()
-            S_Layout.height = S_height
+            S_Layout.height = S_height+20
+
+            print('text_r',text_r)
             try:
-               S_Layout.children[2].text ='\n'.join(text_r)
+               S_Layout.children[1].children[2].text ='\n'.join(text_r)
+               S_Layout.children[0].text = S_Layout.children[0].values[type_]
             except IndexError:
                print('Error')
-               self.popup.content.children[0].text = 'エラーが発生しました. もう一度やり直してください' 
+               self.popup.content.children[0].text = 'エラーが発生しました. もう一度やり直してください'
+               time.sleep(5) 
             S_Layout.y += self.box.ypos
-            S_Layout.children[1].wav_id = wav_id
+            S_Layout.children[1].children[1].wav_id = wav_id
             self.box.add_widget(S_Layout)
-            self.box.ypos += 20+S_height
+            self.box.ypos += 50+S_height
 
             if self.box.ypos > self.box.height:
                 self.box.height = self.box.ypos+S_height
@@ -343,30 +352,12 @@ class AudioRecorder_Player:
         if r_cmd == 1:
            print('LAST CHUNK RECIEVE')
            client.close()
-        
-    def send_wav(self):
-        # wavfile送信は別のスレッドでする
-        send_thread = threading.Thread(target = self.recieve_text,args=(WAV,self.pac,))
-        send_thread.start()
 
-def streaming_thread(player,client,baffer_pos):
-
-    audio_thread = threading.Thread(target=player.streaming,args=(client,baffer_pos))
+def run_thread(target,args):
+    audio_thread = threading.Thread(target=target,args=args)
     audio_thread.setDaemon(True)
     audio_thread.start()
-          
-def recording(recorder,box):
-    # 録音は別のスレッドでする
-    audio_thread = threading.Thread(target=recorder.recordAudio,args=(box,))
-    audio_thread.setDaemon(True)
-    audio_thread.start()
-    
-def playing(player,wav_id):
-    # 再生は別のスレッドでする
-    audio_thread = threading.Thread(target=player.playAudio,args=(wav_id,))
-    audio_thread.start()
-    
-    
+
 def send_pac(client,type_ID,q,ProgressBar):
     print('connect to' , add, 'port:' ,port)
     print(len(q))
@@ -392,36 +383,18 @@ def send_pac(client,type_ID,q,ProgressBar):
         ProgressBar.parent.popup_close()       
     print('sended')
 
-def send_pac_recieve(type_ID,pac):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-        client.connect((add, port))
-        send_pac(client,type_ID,pac,None)
-        r_packet = bytes()
-      
-        while True:
-            tmp = client.recv(4096)
-            if tmp ==b'':
-                raise RuntimeError("socket connection broken")
-            r_packet += tmp
-            if len(r_packet)>4:
-                if len(r_packet) >= int.from_bytes(r_packet[0:4],'big'):
-                    break
-                    
-    r_packet = r_packet[4:]
-    
-    return r_packet
 
 def recieve_pac(client):
 
 	MSGLEN = 8192
-	cicle_t = 0
 	data_len = 0
 	offset = 0
 	data_info = bytes()
-	while data_len < MSGLEN:
+	while data_len <  MSGLEN:
 		tmp = client.recv(MSGLEN)
 		data_info += tmp
 		data_len = len(data_info)
+		print('datalen_rec')
 	r_cmd = int.from_bytes(data_info[0:2], 'big')
 	data_len = int.from_bytes(data_info[2:MSGLEN],'big')
 	MSG = bytearray(data_len)
@@ -430,10 +403,8 @@ def recieve_pac(client):
 	while offset < data_len:
 		start_t = time.time()
 		tmp = client.recv(MSGLEN)
-		recv_t = time.time()
 		MSG[offset:offset+len(tmp)] = tmp
 		offset += len(tmp)
-
 	return r_cmd, MSG
 def clean_text(text):
     ngw= [' ','　']
@@ -441,12 +412,14 @@ def clean_text(text):
     text = text.replace('　','')
     text = text.split('\n')
     tc = []
-    for t in text:
-        tmp = t.split('。')[:-1]
+    if len(text) > 1:
+       for t in text:
+          tmp = t.split('。')[:-1]
         
-        for t in tmp:
-           tc.append(t)
-    return tc
+          for t in tmp:
+             tc.append(t)
+       return tc
+    return text
 
 class REC_Button(ToggleButton):
     
@@ -468,7 +441,7 @@ class REC_Button(ToggleButton):
     def on_press(self):
         
         if self.state == 'down':
-            recording(self.recorder,self.parent.parent.children[1].children[0])
+            run_thread(self.recorder.recordAudio,[self.parent.parent.children[1].children[0],])
             self.text = '録音中'
         else:
             self.recorder.paused.set()
@@ -495,7 +468,7 @@ class Play_Button(ToggleButton):
             self.player.PlayB = self
             self.state = 'down'
             #0 : 再生
-            playing(self.player,self.wav_id)
+            run_thread(self.player.playAudio,[self.wav_id,])
             self.player.play_stop = 1
             self.text = '停止'
         else:
@@ -566,10 +539,10 @@ class SummaryMenu(BoxLayout):
         #本文
         if self.children[1].children[4].text:
             t = self.children[1].children[4].text.encode()
-            pac += int(len(t)).to_bytes(4,'big')
+            pac = int(len(t)).to_bytes(4,'big')
             pac += t
         else:
-            pac += int(0).to_bytes(4,'big')
+            pac = int(0).to_bytes(4,'big')
         #要約
         if self.children[1].children[2].text:
             t = self.children[1].children[2].text.encode()
@@ -674,9 +647,10 @@ class Summary_Button(Button):
         suma = ''
         task = ''
         imp = ''
-        if self.parent.parent.children[1].children[0].children:
-            tmp = [a.children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[2].text != '']
-           # task = "\n".join([a.children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[1].text == 'タスク'])
+        print('Sentence_Lay:',self.parent.parent.children[1].children[0].children[1])
+        if self.parent.parent.children[1].children[0].children[1]:
+            tmp = [a.children[1].children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[1].children[2].text != '']
+            task = "\n".join([a.children[1].children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[0].text == 'タスク'])
             print('Giji list:', tmp) 
             result = "\n".join(tmp)    
             if len(tmp) > 1:
@@ -694,8 +668,7 @@ class Summary_Button(Button):
                 suma = suma.split('。') 
                 suma = [a+ '。' for a in suma]
                 suma = suma[:-1]
-            print('CHILD:', self.parent.parent.children[1].children)
-            imp = [a.children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[1].text == '重要' and a.children[2].text not in suma]
+            imp = [a.children[1].children[2].text for a in reversed(self.parent.parent.children[1].children[0].children) if a.children[0].text == '重要' and a.children[1].children[2].text not in suma]
             
             imp = "\n".join(imp)+ "\n".join(suma)
 

@@ -40,18 +40,27 @@ MyRoot:
     size_hint_x : 1
     size_hint_y : None
     y : 30
-    height:60
+
+    orientation: 'vertical'
+        
+    BoxLayout:
+        
+        size_hint_x : 1
+        size_hint_y : 0.7
+        
+        Sentence:
+            size_hint_x : 0.6
+            size_hint_y : 1
+        Play_Button:
+            size_hint_x : 0.05
+            size_hint_y : 1
+        Seek_Bar:
+            size_hint_x : 0.35
+            size_hint_y : 1
     
-    Sentence:
-        size_hint_x : 0.6
-        size_hint_y : 1
-    Play_Button:
-        size_hint_x : 0.05
-        size_hint_y : 1
-    Seek_Bar:
-        size_hint_x : 0.35
-        size_hint_y : 1
-    
+    Type_Spinner: 
+        size_hint_x : 0.2
+        size_hint_y : 0.2
 <Button_Layout>:
 
     size_hint_x:1
@@ -180,9 +189,6 @@ MyRoot:
 
 <Type_Spinner>:
     values:'','タスク','重要'
-    size_hint:None,None
-    width:200
-    height : 30
     
 <TestInput>:
     text_validate_unfocus:False
