@@ -32,8 +32,8 @@ from tkinter import ttk
 from multiprocessing import Process
 from kivy.properties import StringProperty
 import math
-
-LabelBase.register(DEFAULT_FONT,'myfont.ttc')
+import japanize_kivy
+#LabelBase.register(DEFAULT_FONT,'myfont.ttc')
 
 
 
