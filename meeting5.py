@@ -24,7 +24,6 @@ import socket
 import multiprocessing 
 import threading
 import json
-import pandas as pd
 import random
 from kivy.core.window import Window
 import tkinter
@@ -32,8 +31,8 @@ from tkinter import ttk
 from multiprocessing import Process
 from kivy.properties import StringProperty
 import math
-import japanize_kivy
-#LabelBase.register(DEFAULT_FONT,'myfont.ttc')
+#import japanize_kivy
+LabelBase.register(DEFAULT_FONT,'myfont.ttc')
 
 
 
@@ -160,6 +159,7 @@ class AudioRecorder_Player:
             self.seek_bar.value = 0
             self.off_set = 0
             self.loading = 0
+            self.pause_c = 0 
             print("STREAMING")
             print("Channel num : ", nchanneles)
             print("Sample width : ", self.samplewidth)
@@ -199,7 +199,15 @@ class AudioRecorder_Player:
                      if self.paused.is_set():
                        while self.paused.is_set():
                           print('pausing')
-                          time.sleep(1) 
+                          time.sleep(1)
+                          self.pause_c += 1
+                          if self.pause_c >=5:
+                             self.r_cmd = 1
+                             self.paused.clear()
+                             break
+                       else:
+                        continue
+                       break
                     
                   print('end offset:',self.off_set)
                   if self.r_cmd ==0:
@@ -221,29 +229,30 @@ class AudioRecorder_Player:
                         while self.loading == 1:
                            print('loading')
                            time.sleep(1)
+        if self.pause_c < 5:
+                if baffer_pos == 0:
+                        baffer_pos = int(BAFFER/2/self.samplewidth)
+                else:
+                        baffer_pos = 0
+                print('LAST CHUNK PLAY!!')
+                DA = self.data_array[baffer_pos:baffer_pos+self.MSGlen]
+                #チャンクごとに再生
+                #最後のあまり再生
+                for i in range(0,int(BAFFER/2/self.CHUNK/2)):
+                        stream.write(DA[int(i*self.CHUNK*2/self.samplewidth):int((i+1)*self.CHUNK*2/self.samplewidth)].tobytes())
+                        self.off_set += self.CHUNK*2/self.samplewidth
+                        self.seek_bar.value += self.CHUNK*2/self.samplewidth
 
-
-        if baffer_pos == 0:
-           baffer_pos = int(BAFFER/2/self.samplewidth)
-        else:
-           baffer_pos = 0
-        print('LAST CHUNK PLAY!!')
-        DA = self.data_array[baffer_pos:baffer_pos+self.MSGlen]
-        #チャンクごとに再生
-        #最後のあまり再生
-        for i in range(0,int(BAFFER/2/self.CHUNK/2)):
-           stream.write(DA[int(i*self.CHUNK*2/self.samplewidth):int((i+1)*self.CHUNK*2/self.samplewidth)].tobytes())
-           self.off_set += self.CHUNK*2/self.samplewidth
-           self.seek_bar.value += self.CHUNK*2/self.samplewidth
-
-        stream.write(DA[int((i+1)*self.CHUNK*2/self.samplewidth):self.MSGlen].tobytes())
-        self.seek_bar.value = nframes
+                stream.write(DA[int((i+1)*self.CHUNK*2/self.samplewidth):self.MSGlen].tobytes())
+                self.seek_bar.value = nframes
         stream.close()
         pa.terminate()
         client.close()
         self.PlayB.state = 'normal'
         self.PlayB.text = '再生'
         self.play_stop = 0
+        self.pause_c = 0
+        self.r_cmd = 0 
 
     def recieve_text(self,type_ID,pac):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
@@ -257,36 +266,34 @@ class AudioRecorder_Player:
 
             if self.popup:
                self.popup.open()
-            r_packet = bytes()
-            while True:
-                data = client.recv(4096)
-                r_packet += data
-                if not data:
-                    break
+            r_cmd,r_packet = recieve_pac(client)
         len_sum = 0
         while True:
             wav_id =int.from_bytes(r_packet[len_sum:len_sum+5], 'big')
             type_ = int.from_bytes(r_packet[len_sum+5:len_sum+6], 'big')
             text_len = int.from_bytes(r_packet[len_sum+6:len_sum+11], 'big')
             text_r = r_packet[len_sum+11:len_sum+11+text_len]
-            len_sum += len_sum+11+text_len
+            print('MSG_len:',len(r_packet))
+            print('Id:',wav_id)
+            print('test_len:',text_len)
+            len_sum = len_sum+11+text_len
             text_r = text_r.decode('utf-8')
             text_r = clean_text(text_r)
-            S_height = 30
+            S_height = 40
             for t in text_r:
                if len(t) > 30:
-                  S_height += math.ceil(len(t)/30)*10
+                  S_height += math.ceil(len(t)/30)*40
             S_Layout = Sentence_Layout()
             S_Layout.height = S_height+20
-
             print('text_r',text_r)
-            try:
-               S_Layout.children[1].children[2].text ='\n'.join(text_r)
-               S_Layout.children[0].text = S_Layout.children[0].values[type_]
-            except IndexError:
-               print('Error')
-               self.popup.content.children[0].text = 'エラーが発生しました. もう一度やり直してください'
-               time.sleep(5) 
+            while True:
+               try:
+                  S_Layout.children[1].children[2].text ='\n'.join(text_r)
+                  S_Layout.children[0].text = S_Layout.children[0].values[type_]
+                  break
+               except IndexError:
+                  print('Error')
+                 # self.popup.content.children[0].text = 'エラーが発生しました. もう一度やり直してください'
             S_Layout.y += self.box.ypos
             S_Layout.children[1].children[1].wav_id = wav_id
             self.box.add_widget(S_Layout)
@@ -775,8 +782,12 @@ if __name__ == '__main__':
             mic_ids.append(index)
         if p. get_device_info_by_index(index)['maxOutputChannels'] > 0:
             sp_ids.append(index)
-            
-    with open('Config.json') as f:
+    df = dict()
+    df['mic_id'] = 0
+    df['sp_id'] = 0
+    with open('./Config.json', 'w') as f:
+        json.dump(df, f, ensure_ascii=False)           
+    with open('./Config.json') as f:
         df = json.load(f)
     if df['mic_id'] not in mic_ids:
         df['mic_id'] = mic_ids[0]  
@@ -784,7 +795,7 @@ if __name__ == '__main__':
     if df['sp_id'] not in sp_ids:
         df['sp_id'] = sp_ids[0] 
 
-    with open('Config.json', 'w') as f:
+    with open('./Config.json', 'w') as f:
         json.dump(df, f, ensure_ascii=False)  
     pac = bytes(1)      
     #スタートの処理
